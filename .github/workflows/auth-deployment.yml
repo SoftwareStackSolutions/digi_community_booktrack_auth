@@ -80,7 +80,17 @@ jobs:
       
           mv auth-package.zip artifact-repo/Auth/Auth-${VERSION}.zip
           cp artifact-repo/Auth/Auth-${VERSION}.zip artifact-repo/Auth/Auth-latest.zip
-      
+
+      - name: Cleanup old artifacts (keep last 5)
+        if: steps.hash.outputs.no_change == 'false'
+        run: |
+          cd artifact-repo/Auth
+          echo "Before cleanup:"
+          ls -1 Auth-v*.zip || true
+          ls -1 Auth-v*.zip 2>/dev/null | sort -V | head -n -5 | xargs -r rm -f
+          echo "After cleanup:"
+          ls -1 Auth-v*.zip || true
+          
       - name: Commit & Push
         if: steps.hash.outputs.no_change == 'false'
         run: |
