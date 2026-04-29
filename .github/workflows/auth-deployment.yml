@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: SoftwareStackSolutions/digi_community_booktrack_artifact
-          token: ${{ secrets.GITHUB_TOKEN }}   # since repo is public
+          token: ${{ secrets.MY_GITHUB_TOKEN }}   # since repo is public
           path: artifact-repo
       
       # ✅ DO NOT create folder, just use existing Auth
