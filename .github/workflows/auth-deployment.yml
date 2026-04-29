@@ -32,27 +32,26 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: SoftwareStackSolutions/digi_community_booktrack_artifact
-          token: ${{ secrets.MY_GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}   # since repo is public
           path: artifact-repo
-
-      # ✅ Use auth folder
+      
+      # ✅ DO NOT create folder, just use existing Auth
       - name: Check previous hash
         run: |
-          mkdir -p artifact-repo/auth
-          cd artifact-repo/auth
-
-          latest_file=$(ls auth-v*.zip 2>/dev/null | sort -V | tail -n 1)
-
+          cd artifact-repo/Auth
+      
+          latest_file=$(ls Auth-v*.zip 2>/dev/null | sort -V | tail -n 1)
+      
           if [[ -f "$latest_file" ]]; then
             unzip -p "$latest_file" | sha256sum | cut -d' ' -f1 > ../../../latest_hash.txt
           else
             echo "no_previous_hash" > ../../../latest_hash.txt
           fi
-
+      
       - name: Generate current hash
         run: |
           unzip -p auth-package.zip | sha256sum | cut -d' ' -f1 > current_hash.txt
-
+      
       - name: Compare hash
         id: hash
         run: |
@@ -61,34 +60,34 @@ jobs:
           else
             echo "no_change=false" >> $GITHUB_OUTPUT
           fi
-
+      
       - name: Skip if no change
         if: steps.hash.outputs.no_change == 'true'
         run: echo "No changes detected"
-
+      
       - name: Get next version
         if: steps.hash.outputs.no_change == 'false'
         id: version
         run: |
-          cd artifact-repo/auth
-          count=$(ls auth-v*.zip 2>/dev/null | wc -l)
+          cd artifact-repo/Auth
+          count=$(ls Auth-v*.zip 2>/dev/null | wc -l)
           echo "version=v$((count + 1))" >> $GITHUB_OUTPUT
-
+      
       - name: Move artifact
         if: steps.hash.outputs.no_change == 'false'
         run: |
           VERSION=${{ steps.version.outputs.version }}
-
-          mv auth-package.zip artifact-repo/auth/auth-${VERSION}.zip
-          cp artifact-repo/auth/auth-${VERSION}.zip artifact-repo/auth/auth-latest.zip
-
+      
+          mv auth-package.zip artifact-repo/Auth/Auth-${VERSION}.zip
+          cp artifact-repo/Auth/Auth-${VERSION}.zip artifact-repo/Auth/Auth-latest.zip
+      
       - name: Commit & Push
         if: steps.hash.outputs.no_change == 'false'
         run: |
           cd artifact-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add auth/*.zip
+          git add Auth/*.zip
           git commit -m "Add Auth Artifact ${{ steps.version.outputs.version }}"
           git push origin main
 
