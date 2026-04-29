@@ -167,11 +167,14 @@ jobs:
           aws eks update-kubeconfig \
             --region ${{ secrets.AWS_REGION }} \
             --name ${{ secrets.EKS_CLUSTER_NAME }}
-
-      # ✅ Deploy
-      - name: Deploy to cluster
+            
+      - name: Deploy Postgres
         run: |
           kubectl apply -f namespace.yaml
+          kubectl apply -f postgres/
+      
+      - name: Deploy to cluster
+        run: |
           kubectl apply -f aws-auth.yaml
           kubectl apply -f secrets.yaml
           kubectl apply -f auth-deployment.yaml
