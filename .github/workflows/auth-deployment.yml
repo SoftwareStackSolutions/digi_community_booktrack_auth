@@ -1,4 +1,4 @@
-name: Backend CI Pipeline
+name: Auth Backend CI Pipeline
 
 on:
   push:
@@ -22,11 +22,11 @@ jobs:
       - name: Install zip
         run: sudo apt-get update && sudo apt-get install -y zip
 
-      # ✅ Package only tracking-service
-      - name: Zip tracking-service
+      # ✅ Package auth-service
+      - name: Zip auth-service
         run: |
-          cd tracking-service
-          zip -r ../tracking-package.zip . -x "*.git*" "__pycache__/*"
+          cd auth-service
+          zip -r ../auth-package.zip . -x "*.git*" "__pycache__/*"
 
       - name: Checkout Artifact Repo
         uses: actions/checkout@v4
@@ -35,13 +35,13 @@ jobs:
           token: ${{ secrets.MY_GITHUB_TOKEN }}
           path: artifact-repo
 
-      # ✅ Use Tracking folder
+      # ✅ Use auth folder
       - name: Check previous hash
         run: |
-          mkdir -p artifact-repo/Tracking
-          cd artifact-repo/Tracking
+          mkdir -p artifact-repo/auth
+          cd artifact-repo/auth
 
-          latest_file=$(ls Tracking-v*.zip 2>/dev/null | sort -V | tail -n 1)
+          latest_file=$(ls auth-v*.zip 2>/dev/null | sort -V | tail -n 1)
 
           if [[ -f "$latest_file" ]]; then
             unzip -p "$latest_file" | sha256sum | cut -d' ' -f1 > ../../../latest_hash.txt
@@ -51,7 +51,7 @@ jobs:
 
       - name: Generate current hash
         run: |
-          unzip -p tracking-package.zip | sha256sum | cut -d' ' -f1 > current_hash.txt
+          unzip -p auth-package.zip | sha256sum | cut -d' ' -f1 > current_hash.txt
 
       - name: Compare hash
         id: hash
@@ -70,8 +70,8 @@ jobs:
         if: steps.hash.outputs.no_change == 'false'
         id: version
         run: |
-          cd artifact-repo/Auth
-          count=$(ls Auth-v*.zip 2>/dev/null | wc -l)
+          cd artifact-repo/auth
+          count=$(ls auth-v*.zip 2>/dev/null | wc -l)
           echo "version=v$((count + 1))" >> $GITHUB_OUTPUT
 
       - name: Move artifact
@@ -79,8 +79,8 @@ jobs:
         run: |
           VERSION=${{ steps.version.outputs.version }}
 
-          mv auth-package.zip artifact-repo/Auth/Auth-${VERSION}.zip
-          cp artifact-repo/Auth/Auth-${VERSION}.zip artifact-repo/Auth/Auth-latest.zip
+          mv auth-package.zip artifact-repo/auth/auth-${VERSION}.zip
+          cp artifact-repo/auth/auth-${VERSION}.zip artifact-repo/auth/auth-latest.zip
 
       - name: Commit & Push
         if: steps.hash.outputs.no_change == 'false'
@@ -88,7 +88,7 @@ jobs:
           cd artifact-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Auth/*.zip
+          git add auth/*.zip
           git commit -m "Add Auth Artifact ${{ steps.version.outputs.version }}"
           git push origin main
 
@@ -110,7 +110,7 @@ jobs:
 
       - name: Copy latest artifact
         run: |
-          cp artifact-repo/Auth/Auth-latest.zip ./artifact.zip
+          cp artifact-repo/auth/auth-latest.zip ./artifact.zip
 
       - name: Extract artifact
         run: |
@@ -131,13 +131,12 @@ jobs:
       - name: Tag image
         run: |
           OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          docker tag auth:latest ghcr.io/$OWNER/auth-application:latest
+          docker tag auth-application:latest ghcr.io/$OWNER/auth-application:latest
 
       - name: Push image
         run: |
           OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           docker push ghcr.io/$OWNER/auth-application:latest
-
 
   deploy-to-eks:
     name: Deploy to EKS
@@ -145,19 +144,19 @@ jobs:
     needs: Container-Build-and-Publish
 
     permissions:
-      id-token: write   
+      id-token: write
       contents: read
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # ✅ OIDC Authentication
+      # ✅ AWS OIDC
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
@@ -165,9 +164,11 @@ jobs:
       # ✅ Connect to EKS
       - name: Update kubeconfig
         run: |
-          aws eks update-kubeconfig --region us-east-1 --name eks-dev-1-0-3
+          aws eks update-kubeconfig \
+            --region ${{ secrets.AWS_REGION }} \
+            --name ${{ secrets.EKS_CLUSTER_NAME }}
 
-      # ✅ Deploy manifests
+      # ✅ Deploy
       - name: Deploy to cluster
         run: |
           kubectl apply -f namespace.yaml
@@ -176,7 +177,6 @@ jobs:
           kubectl apply -f auth-deployment.yaml
           kubectl apply -f auth-service.yaml
 
-      # ✅ Force new image pull
       - name: Restart deployment
         run: |
-          kubectl rollout restart deployment -n tracking-app
+          kubectl rollout restart deployment -n auth-app
