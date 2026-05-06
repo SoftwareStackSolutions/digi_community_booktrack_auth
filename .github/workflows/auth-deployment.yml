@@ -31,13 +31,11 @@ jobs:
       - name: Install zip
         run: sudo apt-get update && sudo apt-get install -y zip unzip
 
-      # Zip service
       - name: Zip auth-service
         run: |
           cd auth-service
           zip -r ../auth-package.zip . -x "*.git*" "__pycache__/*"
 
-      # Checkout artifact repo
       - name: Checkout Artifact Repo
         uses: actions/checkout@v4
         with:
@@ -45,7 +43,6 @@ jobs:
           token: ${{ secrets.MY_GITHUB_TOKEN }}
           path: artifact-repo
 
-      # Get previous hash
       - name: Check previous hash
         run: |
           cd artifact-repo/Auth
@@ -57,12 +54,10 @@ jobs:
             echo "no_previous_hash" > ../../../latest_hash.txt
           fi
 
-      # Current hash
       - name: Generate current hash
         run: |
           unzip -p auth-package.zip | sha256sum | cut -d' ' -f1 > current_hash.txt
 
-      # Compare
       - name: Compare hash
         id: hash
         run: |
@@ -72,7 +67,6 @@ jobs:
             echo "no_change=false" >> $GITHUB_OUTPUT
           fi
 
-      # Generate version
       - name: Generate version
         id: set_version
         run: |
@@ -85,7 +79,6 @@ jobs:
             echo "version=v$((count + 1))" >> $GITHUB_OUTPUT
           fi
 
-      # Move artifact only if changed
       - name: Move artifact
         if: steps.hash.outputs.no_change == 'false'
         run: |
@@ -93,7 +86,6 @@ jobs:
           mv auth-package.zip artifact-repo/Auth/Auth-${VERSION}.zip
           cp artifact-repo/Auth/Auth-${VERSION}.zip artifact-repo/Auth/Auth-latest.zip
 
-      # Commit
       - name: Commit & Push
         if: steps.hash.outputs.no_change == 'false'
         run: |
@@ -105,12 +97,16 @@ jobs:
           git push origin main
 
 # -----------------------------------------
-# 3️⃣ BUILD & PUSH TO ECR
+# 3️⃣ BUILD & PUSH TO ECR (OIDC FIXED)
 # -----------------------------------------
   container-build-and-publish:
     name: Build & Push to ECR
     runs-on: ubuntu-latest
     needs: build-and-publish-artifact
+
+    permissions:
+      id-token: write     # ✅ FIXED
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -131,8 +127,7 @@ jobs:
           mkdir app
           unzip artifact.zip -d app
 
-      # AWS login
-      - name: Configure AWS Credentials
+      - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -144,12 +139,9 @@ jobs:
           | docker login --username AWS --password-stdin \
           ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-      # Build image
       - name: Build Docker Image
-        run: |
-          docker build -t auth-app ./app
+        run: docker build -t auth-app ./app
 
-      # Tag image
       - name: Tag Image
         run: |
           VERSION=${{ needs.build-and-publish-artifact.outputs.version }}
@@ -158,7 +150,6 @@ jobs:
           docker tag auth-app:latest $ECR_URI:$VERSION
           docker tag auth-app:latest $ECR_URI:latest
 
-      # Push
       - name: Push to ECR
         run: |
           VERSION=${{ needs.build-and-publish-artifact.outputs.version }}
@@ -168,7 +159,7 @@ jobs:
           docker push $ECR_URI:latest
 
 # -----------------------------------------
-# 4️⃣ DEPLOY TO EKS
+# 4️⃣ DEPLOY TO EKS (OIDC FIXED)
 # -----------------------------------------
   deploy-to-eks:
     name: Deploy to EKS
@@ -176,7 +167,7 @@ jobs:
     needs: container-build-and-publish
 
     permissions:
-      id-token: write
+      id-token: write     # ✅ FIXED
       contents: read
 
     steps:
@@ -194,12 +185,11 @@ jobs:
             --region ${{ secrets.AWS_REGION }} \
             --name ${{ secrets.EKS_CLUSTER_NAME }}
 
-      # Replace image dynamically
       - name: Deploy to cluster
         run: |
           VERSION=${{ needs.build-and-publish-artifact.outputs.version }}
           ECR_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/auth-app
-
+ 
           sed -i "s|IMAGE_PLACEHOLDER|$ECR_URI:$VERSION|g" auth-deployment.yaml
 
           kubectl apply -f namespace.yaml
