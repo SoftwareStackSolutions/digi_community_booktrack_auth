@@ -97,7 +97,7 @@ jobs:
           git push origin main
 
 # -----------------------------------------
-# 3️⃣ BUILD & PUSH TO ECR (OIDC FIXED)
+# 3️⃣ BUILD & PUSH TO ECR (AUTO ACCOUNT ID)
 # -----------------------------------------
   container-build-and-publish:
     name: Build & Push to ECR
@@ -105,7 +105,7 @@ jobs:
     needs: build-and-publish-artifact
 
     permissions:
-      id-token: write     # ✅ FIXED
+      id-token: write
       contents: read
 
     steps:
@@ -127,39 +127,57 @@ jobs:
           mkdir app
           unzip artifact.zip -d app
 
-      - name: Configure AWS Credentials (OIDC)
+      # ✅ AWS LOGIN (OIDC)
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      # ✅ AUTO GET ACCOUNT ID
+      - name: Get AWS Account ID
+        id: aws_account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+
+      # ✅ LOGIN TO ECR
       - name: Login to ECR
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
           | docker login --username AWS --password-stdin \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+          ${{ steps.aws_account.outputs.account_id }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
+      # BUILD IMAGE
       - name: Build Docker Image
         run: docker build -t auth-app ./app
 
+      # TAG IMAGE
       - name: Tag Image
         run: |
           VERSION=${{ needs.build-and-publish-artifact.outputs.version }}
-          ECR_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/auth-app
+          ACCOUNT_ID=${{ steps.aws_account.outputs.account_id }}
+          REGION=${{ secrets.AWS_REGION }}
+
+          ECR_URI=$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/auth-app
 
           docker tag auth-app:latest $ECR_URI:$VERSION
           docker tag auth-app:latest $ECR_URI:latest
 
+      # PUSH IMAGE
       - name: Push to ECR
         run: |
           VERSION=${{ needs.build-and-publish-artifact.outputs.version }}
-          ECR_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/auth-app
+          ACCOUNT_ID=${{ steps.aws_account.outputs.account_id }}
+          REGION=${{ secrets.AWS_REGION }}
+
+          ECR_URI=$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/auth-app
 
           docker push $ECR_URI:$VERSION
           docker push $ECR_URI:latest
 
 # -----------------------------------------
-# 4️⃣ DEPLOY TO EKS (OIDC FIXED)
+# 4️⃣ DEPLOY TO EKS
 # -----------------------------------------
   deploy-to-eks:
     name: Deploy to EKS
@@ -167,7 +185,7 @@ jobs:
     needs: container-build-and-publish
 
     permissions:
-      id-token: write     # ✅ FIXED
+      id-token: write
       contents: read
 
     steps:
@@ -179,6 +197,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      - name: Get AWS Account ID
+        id: aws_account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+
       - name: Update kubeconfig
         run: |
           aws eks update-kubeconfig \
@@ -188,8 +212,11 @@ jobs:
       - name: Deploy to cluster
         run: |
           VERSION=${{ needs.build-and-publish-artifact.outputs.version }}
-          ECR_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/auth-app
- 
+          ACCOUNT_ID=${{ steps.aws_account.outputs.account_id }}
+          REGION=${{ secrets.AWS_REGION }}
+
+          ECR_URI=$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/auth-app
+
           sed -i "s|IMAGE_PLACEHOLDER|$ECR_URI:$VERSION|g" auth-deployment.yaml
 
           kubectl apply -f namespace.yaml
