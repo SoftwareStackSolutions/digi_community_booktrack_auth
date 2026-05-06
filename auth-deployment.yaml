@@ -13,13 +13,11 @@ spec:
       labels:
         app: auth-service
       annotations:
-        redeploy-timestamp: "2026-04-29T11:15:00"   
+        redeploy-timestamp: "2026-04-29T11:15:00"
     spec:
-      imagePullSecrets:
-        - name: ghcr-secret   
       containers:
         - name: auth-service
-          image: ghcr.io/softwarestacksolutions/auth-application:latest
+          image: IMAGE_PLACEHOLDER   
           imagePullPolicy: Always
           ports:
             - containerPort: 8001
