@@ -2,56 +2,67 @@ name: Auth Backend CI Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ development ]
 
 jobs:
 
+# -----------------------------------------
+# 1️⃣ CHECKOUT
+# -----------------------------------------
   checkout-source-code:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+# -----------------------------------------
+# 2️⃣ BUILD ARTIFACT + VERSIONING
+# -----------------------------------------
   build-and-publish-artifact:
     name: Build and Publish Artifact
     runs-on: ubuntu-latest
     needs: checkout-source-code
 
+    outputs:
+      version: ${{ steps.set_version.outputs.version }}
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Install zip
-        run: sudo apt-get update && sudo apt-get install -y zip
+        run: sudo apt-get update && sudo apt-get install -y zip unzip
 
-      # ✅ Package auth-service
+      # Zip service
       - name: Zip auth-service
         run: |
           cd auth-service
           zip -r ../auth-package.zip . -x "*.git*" "__pycache__/*"
 
+      # Checkout artifact repo
       - name: Checkout Artifact Repo
         uses: actions/checkout@v4
         with:
           repository: SoftwareStackSolutions/digi_community_booktrack_artifact
-          token: ${{ secrets.MY_GITHUB_TOKEN }}   # since repo is public
+          token: ${{ secrets.MY_GITHUB_TOKEN }}
           path: artifact-repo
-      
-      # ✅ DO NOT create folder, just use existing Auth
+
+      # Get previous hash
       - name: Check previous hash
         run: |
           cd artifact-repo/Auth
-      
           latest_file=$(ls Auth-v*.zip 2>/dev/null | sort -V | tail -n 1)
-      
+
           if [[ -f "$latest_file" ]]; then
             unzip -p "$latest_file" | sha256sum | cut -d' ' -f1 > ../../../latest_hash.txt
           else
             echo "no_previous_hash" > ../../../latest_hash.txt
           fi
-      
+
+      # Current hash
       - name: Generate current hash
         run: |
           unzip -p auth-package.zip | sha256sum | cut -d' ' -f1 > current_hash.txt
-      
+
+      # Compare
       - name: Compare hash
         id: hash
         run: |
@@ -60,37 +71,29 @@ jobs:
           else
             echo "no_change=false" >> $GITHUB_OUTPUT
           fi
-      
-      - name: Skip if no change
-        if: steps.hash.outputs.no_change == 'true'
-        run: echo "No changes detected"
-      
-      - name: Get next version
-        if: steps.hash.outputs.no_change == 'false'
-        id: version
+
+      # Generate version
+      - name: Generate version
+        id: set_version
         run: |
           cd artifact-repo/Auth
           count=$(ls Auth-v*.zip 2>/dev/null | wc -l)
-          echo "version=v$((count + 1))" >> $GITHUB_OUTPUT
-      
+
+          if [ "${{ steps.hash.outputs.no_change }}" = "true" ]; then
+            echo "version=latest" >> $GITHUB_OUTPUT
+          else
+            echo "version=v$((count + 1))" >> $GITHUB_OUTPUT
+          fi
+
+      # Move artifact only if changed
       - name: Move artifact
         if: steps.hash.outputs.no_change == 'false'
         run: |
-          VERSION=${{ steps.version.outputs.version }}
-      
+          VERSION=${{ steps.set_version.outputs.version }}
           mv auth-package.zip artifact-repo/Auth/Auth-${VERSION}.zip
           cp artifact-repo/Auth/Auth-${VERSION}.zip artifact-repo/Auth/Auth-latest.zip
 
-      - name: Cleanup old artifacts (keep last 5)
-        if: steps.hash.outputs.no_change == 'false'
-        run: |
-          cd artifact-repo/Auth
-          echo "Before cleanup:"
-          ls -1 Auth-v*.zip || true
-          ls -1 Auth-v*.zip 2>/dev/null | sort -V | head -n -5 | xargs -r rm -f
-          echo "After cleanup:"
-          ls -1 Auth-v*.zip || true
-          
+      # Commit
       - name: Commit & Push
         if: steps.hash.outputs.no_change == 'false'
         run: |
@@ -98,17 +101,19 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Auth/*.zip
-          git commit -m "Add Auth Artifact ${{ steps.version.outputs.version }}"
+          git commit -m "Auth Artifact ${{ steps.set_version.outputs.version }}"
           git push origin main
 
-  Container-Build-and-Publish:
-    name: Build & Push Docker Image
+# -----------------------------------------
+# 3️⃣ BUILD & PUSH TO ECR
+# -----------------------------------------
+  container-build-and-publish:
+    name: Build & Push to ECR
     runs-on: ubuntu-latest
     needs: build-and-publish-artifact
 
     steps:
-      - name: Checkout main repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Checkout artifact repo
         uses: actions/checkout@v4
@@ -126,69 +131,83 @@ jobs:
           mkdir app
           unzip artifact.zip -d app
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.MY_GITHUB_TOKEN }}
-
-      - name: Build Docker image
-        run: |
-          docker build -t auth-application:latest ./app
-
-      - name: Tag image
-        run: |
-          OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          docker tag auth-application:latest ghcr.io/$OWNER/auth-application:latest
-
-      - name: Push image
-        run: |
-          OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          docker push ghcr.io/$OWNER/auth-application:latest
-
-  deploy-to-eks:
-    name: Deploy to EKS
-    runs-on: ubuntu-latest
-    needs: Container-Build-and-Publish
-
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      # ✅ AWS OIDC
+      # AWS login
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v4
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
+          | docker login --username AWS --password-stdin \
+          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-      # ✅ Connect to EKS
+      # Build image
+      - name: Build Docker Image
+        run: |
+          docker build -t auth-app ./app
+
+      # Tag image
+      - name: Tag Image
+        run: |
+          VERSION=${{ needs.build-and-publish-artifact.outputs.version }}
+          ECR_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/auth-app
+
+          docker tag auth-app:latest $ECR_URI:$VERSION
+          docker tag auth-app:latest $ECR_URI:latest
+
+      # Push
+      - name: Push to ECR
+        run: |
+          VERSION=${{ needs.build-and-publish-artifact.outputs.version }}
+          ECR_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/auth-app
+
+          docker push $ECR_URI:$VERSION
+          docker push $ECR_URI:latest
+
+# -----------------------------------------
+# 4️⃣ DEPLOY TO EKS
+# -----------------------------------------
+  deploy-to-eks:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: container-build-and-publish
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
       - name: Update kubeconfig
         run: |
           aws eks update-kubeconfig \
             --region ${{ secrets.AWS_REGION }} \
             --name ${{ secrets.EKS_CLUSTER_NAME }}
-            
-      - name: Deploy Postgres
-        run: |
-          kubectl apply -f namespace.yaml
-          kubectl apply -f postgres/
-      
+
+      # Replace image dynamically
       - name: Deploy to cluster
         run: |
-          kubectl apply -f aws-auth.yaml
+          VERSION=${{ needs.build-and-publish-artifact.outputs.version }}
+          ECR_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/auth-app
+
+          sed -i "s|IMAGE_PLACEHOLDER|$ECR_URI:$VERSION|g" auth-deployment.yaml
+
+          kubectl apply -f namespace.yaml
+          kubectl apply -f postgres/
           kubectl apply -f secrets.yaml
           kubectl apply -f auth-deployment.yaml
           kubectl apply -f auth-service.yaml
 
-      - name: Restart deployment
+      - name: Restart Deployment
         run: |
           kubectl rollout restart deployment -n auth-app
