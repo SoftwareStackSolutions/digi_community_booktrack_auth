@@ -2,7 +2,7 @@ name: Auth Backend CI Pipeline
 
 on:
   push:
-    branches: [ deployment ]
+    branches: [ development ]
 
 jobs:
 
