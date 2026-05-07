@@ -15,13 +15,6 @@ spec:
     metadata:
       labels:
         app: auth-service
-
-    spec:
-      containers:
-        - name: auth-service
-
-          image: nginx:latest
-
           imagePullPolicy: Always
 
           ports:
