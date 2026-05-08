@@ -293,34 +293,27 @@ jobs:
   
     steps:
   
-      - name: Checkout Acceptance Branch
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          ref: acceptance
   
       # CREATE PR
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
   
-          branch: auto-production-pr
+          gh pr create \
+            --base production \
+            --head acceptance \
+            --title "Promote Acceptance to Production" \
+            --body "
+          ## Production Promotion
   
-          base: production
+          This PR promotes latest acceptance changes to production.
   
-          title: Promote Acceptance to Production
+          ### Validation
+          - Acceptance deployment completed
+          - QA validation completed
   
-          commit-message: Promote acceptance to production
-  
-          body: |
-            ## Production Promotion
-  
-            This PR promotes latest acceptance changes to production.
-  
-            ### Validation
-            - Acceptance deployment completed
-            - QA validation completed
-  
-            Please review and approve before merge.
-  
-          delete-branch: true
+          Please review and approve before merge.
+          "
