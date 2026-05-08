@@ -275,3 +275,50 @@ jobs:
       - name: Verify Pods
         run: |
           kubectl get pods -n tracking-app
+          
+# -----------------------------------------
+# 5️⃣ CREATE PR TO PRODUCTION
+# -----------------------------------------
+  create-production-pr:
+    name: Create PR to Production
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - deploy-to-eks
+
+    permissions:
+      pull-requests: write
+      contents: write
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # CREATE PR
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+          commit-message: Promote acceptance to production
+
+          title: Promote Acceptance to Production
+
+          body: |
+            ## Production Promotion
+
+            This PR promotes latest acceptance changes to production.
+
+            ### Validation
+            - Acceptance deployment completed
+            - QA validation completed
+
+            Please review and approve before merge.
+
+          branch: acceptance
+
+          base: production
+
+          delete-branch: false     
